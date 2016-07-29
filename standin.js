@@ -6,8 +6,7 @@
 		proto.matches =
 			proto.matchesSelector || proto.mozMatchesSelector ||
 			proto.msMatchesSelector || proto.oMatchesSelector ||
-			proto.webkitMatchesSelector ||
-			function(s) {
+			proto.webkitMatchesSelector || function(s) {
 				const matches = (this.document || this.ownerDocument).querySelectorAll(s)
 				let i = matches.length
 				while (--i >= 0 && matches.item(i) !== this) {}
@@ -26,6 +25,8 @@
 		return rest && rest.length ? deepGetter(current, rest) : current
 	}
 
+	// just like deepGetter, but return [parent of lastprop, lastprop]
+	// for getting access to set trap
 	function deepParentGetter(obj, fullkey) {
 		const splitIdx = fullkey.lastIndexOf('.')
 		if (splitIdx === -1) return [obj, fullkey]
@@ -82,25 +83,50 @@
 		)
 	}
 
+	// sugar for deepGetters using ctx.data
+	CTX.prototype.find = function(deepkey) {
+		return deepGetter(this.data, deepkey)
+	}
+	CTX.prototype.findParent = function(deepkey) {
+		return deepParentGetter(this.data, deepkey)
+	}
+
 	// instead of performing renders everytime we see a change,
 	// schedule one to happen on the next tick. idempotent per tick.
 	// (rendering is expensive, do it all at once and save cycles)
 	// pass true to force a scheduled render if not in auto_schedule mode
 	CTX.prototype.schedule_render = function(explicit) {
-		if (this.is_rendering || !this.auto_schedule && !explicit) return
-		this.is_rendering = true
-		this._rtimer = setTimeout(this.render.bind(this), 0)
+		if (!this.is_rendering && (this.auto_schedule || explicit)) {
+			this.is_rendering = true
+			this._rtimer = setTimeout(this.render.bind(this), 0)
+		}
+		return this
 	}
 
 	// cancel upcoming scheduled render
 	// note that if auto_schedule is on and any ctx.data is changed later,
 	// another render will be scheduled.
 	CTX.prototype.cancel_render = function() {
-		if (!this.is_rendering) return
-		this.is_rendering = false
-		clearTimeout(this._rtimer)
+		if (this.is_rendering) {
+			this.is_rendering = false
+			clearTimeout(this._rtimer)
+		}
+		return this
 	}
 
+	// change notification tree trimmer
+	// if a parent node is modified and any descendant changes
+	// are in the list, skip past them
+	function peekAheadSkip(key, i, changes) {
+		while (true) {
+			const change = changes[i+1]
+			if (change &&
+				change.indexOf(key) === 0 &&
+				changes[i+1][key.length] === '.')
+			i++; else break
+		}
+		return i
+	}
 	// this is expensive, you should probably be using
 	// auto_schedule mode or calling schedule_render(true)
 	CTX.prototype.render = function() {
@@ -108,13 +134,8 @@
 		for (let i = 0; i < changes.length; i++) {
 			const key = changes[i]
 			// ignore explicit descendant changes
-			while (true) {
-				const change = changes[i+1]
-				if (change &&
-					change.indexOf(key) === 0 &&
-					changes[i+1][key.length] === '.')
-				i++; else break
-			}
+			i = peekAheadSkip(key, i, changes)
+
 			// automatically include descendant changes
 			const currentchanges = [key, ...Object.keys(this.bindings).filter(
 				b => b.indexOf(key) === 0 && b[key.length] === '.'
@@ -122,35 +143,38 @@
 
 			for (let changekey of currentchanges) {
 				const binds = this.bindings[changekey] || []
+				// rendering happens here
 				for (let binding of binds)
 					BIND_TYPES[binding.type].handle(binding.el, this, changekey)
 			}
 		}
-		this.changes.splice(0, this.changes.length)
+		this.changes.splice(0, this.changes.length) // empty changelist
 		this.cancel_render() // clear pending renders on same ctx
 	}
 
+	// hooks up a binding. called in auto for each binding defined
 	CTX.prototype.add_binding = function(el, deepkey, type, selector) {
 		const binds = this.bindings
 		if (!binds[deepkey])
 			binds[deepkey] = []
-		if (BIND_TYPES[type].init &&
+		if (BIND_TYPES[type].init && // only call init if it's unique to key && type
 				!binds[deepkey].some(b => b.type === type))
 			BIND_TYPES[type].init(selector, this, deepkey)
 		binds[deepkey].push({el, type})
+		return this
 	}
 
-	// hook up bindings defined in DOM
+	// hook up bindings defined in DOM by grabbing them all
 	CTX.prototype.auto = function() {
 		Object.keys(BIND_TYPES).forEach(type => {
 			const datatype_attr = `data-${type}`
 			const selector = `[${datatype_attr}]`
-			Reflect.apply([].map, this.root.querySelectorAll(selector), [el => {
+			const els = this.root.querySelectorAll(selector)
+			for (let el of els)
 				this.add_binding(el,
 					el.getAttribute(datatype_attr),
 					type,
 					selector)
-			}])
 		})
 		return this
 	}
@@ -169,39 +193,29 @@
 	// operations to perform with different data-bind-types
 	const BIND_TYPES = {
 		html: {
-			handle(el, ctx, key) {
-				el.innerHTML = deepGetter(ctx.data, key)
-			}
+			handle(el, ctx, key) { el.innerHTML = ctx.find(key) }
 		},
 		text: {
-			handle(el, ctx, key) {
-				el.textContent = deepGetter(ctx.data, key)
-			}
+			handle(el, ctx, key) { el.textContent = ctx.find(key) }
 		},
 		'bind-text': {
-			handle(el, ctx, key) {
-				el.value = deepGetter(ctx.data, key)
-			},
+			handle(el, ctx, key) { el.value = ctx.find(key) },
 			init(selector, ctx, key) {
 				ctx.on('keyup', selector, function(e) {
-					const access = deepParentGetter(ctx.data, key)
+					const access = ctx.findParent(key)
 					if (access[0][access[1]] !== e.target.value)
 						access[0][access[1]] = e.target.value
-				})
-			}
+				})}
 		},
 		'bind-checkbox': {
-			handle(el, ctx, key) {
-				el.checked = !!deepGetter(ctx.data, key)
-			},
+			handle(el, ctx, key) { el.checked = !!ctx.find(key) },
 			init(selector, ctx, key) {
 				ctx.on('change', selector, function(e) {
-					const access = deepParentGetter(ctx.data, key)
+					const access = ctx.findParent(key)
 					access[0][access[1]] = !!e.target.checked
-				})
-			}
+				})}
 		}
 	}
 
-	global.standin = {CTX, BIND_TYPES, deepGetter, on}
+	global.standin = {CTX, BIND_TYPES, deepGetter, deepParentGetter, on}
 })(window);
