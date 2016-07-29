@@ -1,11 +1,12 @@
 ;((global)=>{
+	const PRINT_UNDEFINED = false
+
 	// cross-browser el.matches prototype.
 	// https://developer.mozilla.org/en-US/docs/Web/API/Element/matches
 	if (!Element.prototype.matches) {
 		const proto = Element.prototype
-		proto.matches =
-			proto.matchesSelector || proto.mozMatchesSelector ||
-			proto.msMatchesSelector || proto.oMatchesSelector ||
+		proto.matches = proto.matchesSelector ||
+			proto.mozMatchesSelector || proto.msMatchesSelector ||
 			proto.webkitMatchesSelector || function(s) {
 				const matches = (this.document || this.ownerDocument).querySelectorAll(s)
 				let i = matches.length
@@ -62,6 +63,10 @@
 				// todo: handle arrays better
 				if (setcb()) changes.push(deepkey)
 				target[key] = deepCTX(setcb, changes, deepkey, value)
+				return true // indicate assignment succeeded
+			},
+			deleteProperty: (target, key) => {
+				// todo; array manipulations and delete
 			}
 		})
 	}
@@ -133,7 +138,6 @@
 		const changes = [...new Set(this.changes)].sort()
 		for (let i = 0; i < changes.length; i++) {
 			const key = changes[i]
-			// ignore explicit descendant changes
 			i = peekAheadSkip(key, i, changes)
 
 			// automatically include descendant changes
@@ -187,19 +191,29 @@
 	}
 	CTX.prototype.on = function(name, selector, fn) {
 		on(this.root, name, selector, fn)
+		return this
 	}
 
+	const emptyIfUndefined = PRINT_UNDEFINED ?
+		v => v :
+		v => v === undefined ? '' : v
 
-	// operations to perform with different data-bind-types
+	// operations to perform with different data-* bindings
 	const BIND_TYPES = {
 		html: {
-			handle(el, ctx, key) { el.innerHTML = ctx.find(key) }
+			handle(el, ctx, key) {
+				el.innerHTML = emptyIfUndefined(ctx.find(key))
+			}
 		},
 		text: {
-			handle(el, ctx, key) { el.textContent = ctx.find(key) }
+			handle(el, ctx, key) {
+				el.textContent = emptyIfUndefined(ctx.find(key))
+			}
 		},
 		'bind-text': {
-			handle(el, ctx, key) { el.value = ctx.find(key) },
+			handle(el, ctx, key) {
+				el.value = emptyIfUndefined(ctx.find(key))
+			},
 			init(selector, ctx, key) {
 				ctx.on('keyup', selector, function(e) {
 					const access = ctx.findParent(key)
