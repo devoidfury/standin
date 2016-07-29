@@ -12,7 +12,7 @@ if (!Element.prototype.matches) {
 			let i = matches.length
 			while (--i >= 0 && matches.item(i) !== this) {}
 			return i > -1
-		};
+		}
 }
 
 // traverse an object for a dot-notation path
@@ -203,5 +203,4 @@ const BIND_TYPES = {
 }
 
 global.standin = { CTX, BIND_TYPES, deepGetter, on }
-
 })(window);
