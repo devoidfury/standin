@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+</head>
+<body>
+	<div data-html="hello.world">This is a test with Proxy</div>
+	<div data-text="hello.world">This is a test with Proxy</div>
+
+	<p>
+		<input type="checkbox" data-checkbox="is_checked"> Check me
+	</p>
+
+	<script type="text/javascript" src="standin.js"></script>
+	<script>
+		var ctx = new standin.CTX(document).auto()
+
+		setTimeout(function() {
+			ctx.data.hello = {world: 'first context assignment <b>test</b>'}
+		}, 3000)
+
+		setTimeout(function() {
+			ctx.data.hello.world = 'direct prop change <b>test</b>'
+		}, 6000)
+
+		setTimeout(function() {
+			ctx.data.hello = {world: 'object replacement <b>test</b>'}
+		}, 9000)
+	</script>
+</body>
+</html>
+
